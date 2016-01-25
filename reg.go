@@ -31,7 +31,7 @@ func regHome(w http.ResponseWriter, r *http.Request) {
 			sess, _ := globalSessions.SessionStart(w, r)
 			defer sess.SessionRelease(w)
 			sess.Set("isLogin", 1)
-
+			sess.Set("wsName", regUserData.UserName)
 			fmt.Println(regUserData)
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			homeTemple.Execute(w, r.Host)

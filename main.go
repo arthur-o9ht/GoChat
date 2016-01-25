@@ -2,12 +2,11 @@ package main
 
 import (
 	"flag"
-	"net/http"
 	"github.com/astaxie/beego/session"
+	"net/http"
 )
 
-
-
+var clientString = flag.String("addr", ":8090", "http service address")
 var globalSessions *session.Manager
 
 func init() {
@@ -23,7 +22,6 @@ func main() {
 	http.HandleFunc("/login", loginHome)
 	http.HandleFunc("/reg", regHome)
 	http.HandleFunc("/chat", serveWs)
-
 
 	go h.runHub()
 	err := http.ListenAndServe(*clientString, nil)

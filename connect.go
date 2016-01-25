@@ -1,12 +1,12 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"github.com/gorilla/websocket"
 	"net/http"
 	"text/template"
 	"time"
+	"strings"
 )
 
 const (
@@ -23,10 +23,10 @@ var upgrader = websocket.Upgrader{
 }
 
 /**
- *	坞 结构体构建
+ *	hub 结构体构建
  */
 type hub struct {
-	connections map[*connection]bool
+	connections map[string]*connection
 	broadcast   chan []byte
 	register    chan *connection
 	unregister  chan *connection
@@ -40,8 +40,8 @@ var h = hub{
 	register: make(chan *connection),
 	//注销接口
 	unregister: make(chan *connection),
-	//连接池
-	connections: make(map[*connection]bool),
+	//连接存储
+	connections: make(map[string]*connection),
 	//链接总数
 	numbers: 0,
 }
@@ -50,6 +50,8 @@ var h = hub{
  *	连接 结构体构建
  */
 type connection struct {
+	//ws名称
+	wsName string
 	//ws链接
 	ws *websocket.Conn
 	//ws字符缓存
@@ -73,7 +75,7 @@ func (c *connection) readPump() {
 		if err != nil {
 			break
 		}
-		h.broadcast <- message
+		h.broadcast <- []byte(c.wsName+":"+string(message))
 	}
 }
 
@@ -115,49 +117,42 @@ func (c *connection) writePump() {
 }
 
 /**
- *	端服务接口
- */
-func serveWs(w http.ResponseWriter, r *http.Request) {
-	ws, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		return
-	}
-	c := &connection{msgBuf: make(chan []byte, 256), ws: ws}
-	h.register <- c
-	go c.writePump()
-	c.readPump()
-}
-
-/**
- *	坞运行主体
+ *	hub运行主体
  */
 func (h *hub) runHub() {
 	for {
 		select {
 		case c := <-h.register:
 			if h.numbers < MaxClient {
-				h.connections[c] = true
+				h.connections[c.wsName] = c
 				h.numbers++
 			} else {
-				c.write(websocket.TextMessage, []byte("please enter later"))
+				c.write(websocket.TextMessage, []byte("please try enter later"))
 				c.write(websocket.CloseMessage, []byte{})
 				close(c.msgBuf)
 			}
 		case c := <-h.unregister:
-			if _, ok := h.connections[c]; ok {
+			if _, ok := h.connections[c.wsName]; ok {
 				close(c.msgBuf)
-				delete(h.connections, c)
+				delete(h.connections, c.wsName)
 				h.numbers--
 
 			}
 		case m := <-h.broadcast:
-			for c := range h.connections {
+			msgStr := string(m)
+			msgArr := strings.Split(msgStr, ":")
+			for _,c := range h.connections {
+				if msgArr[0] == c.wsName{
+					m = []byte("你:"+string(msgArr[1]))
+				}else{
+					m = []byte(msgStr)
+				}
 				select {
 				case c.msgBuf <- m:
 				default:
 					if c.msgBuf != nil {
 						close(c.msgBuf)
-						delete(h.connections, c)
+						delete(h.connections, c.wsName)
 					}
 				}
 			}
@@ -166,7 +161,22 @@ func (h *hub) runHub() {
 	}
 }
 
-var clientString = flag.String("addr", ":8090", "http service address")
+/**
+ *	端服务接口
+ */
+func serveWs(w http.ResponseWriter, r *http.Request) {
+	ws, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	sess, _ := globalSessions.SessionStart(w, r)
+	defer sess.SessionRelease(w)
+	userName := sess.Get("wsName").(string)
+	c := &connection{msgBuf: make(chan []byte, 256), ws: ws, wsName: userName}
+	h.register <- c
+	go c.writePump()
+	c.readPump()
+}
 
 //聊天室
 var homeTemple = template.Must(template.ParseFiles("home.html"))
@@ -181,10 +191,10 @@ func serverHome(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", 405)
 		return
 	}
-	sess,_ := globalSessions.SessionStart(w, r)
+	sess, _ := globalSessions.SessionStart(w, r)
 	defer sess.SessionRelease(w)
 	isLogin := sess.Get("isLogin")
-	if isLogin != 1{
+	if isLogin != 1 {
 		http.Error(w, "Method not allowed", 405)
 		return
 	}
